@@ -1,0 +1,405 @@
+{
+  "info": {
+    "name": "Elasticsearch REST API practice",
+    "description": "Run against a local or trial cluster. Set es_url and api_key in an environment. Requests 6 to 8 fail on purpose so you can practise reading errors.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Cluster health",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "ApiKey {{api_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{es_url}}/_cluster/health",
+          "host": [
+            "{{es_url}}"
+          ],
+          "path": [
+            "_cluster",
+            "health"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": ""
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+              "pm.test(\"has a status colour\", () => pm.expect([\"green\",\"yellow\",\"red\"]).to.include(pm.response.json().status));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Index a document",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "ApiKey {{api_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{es_url}}/api-practice/_doc/1?refresh=true",
+          "host": [
+            "{{es_url}}"
+          ],
+          "path": [
+            "api-practice",
+            "_doc",
+            "1"
+          ],
+          "query": [
+            {
+              "key": "refresh",
+              "value": "true"
+            }
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customer\": \"acme\",\n  \"severity\": \"high\",\n  \"message\": \"payment webhook retried 3 times\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"201 created or 200 updated\", () => pm.expect([200,201]).to.include(pm.response.code));",
+              "pm.test(\"result is created or updated\", () => pm.expect([\"created\",\"updated\"]).to.include(pm.response.json().result));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Search",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "ApiKey {{api_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{es_url}}/api-practice/_search",
+          "host": [
+            "{{es_url}}"
+          ],
+          "path": [
+            "api-practice",
+            "_search"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": {\n    \"match\": {\n      \"message\": \"webhook\"\n    }\n  }\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+              "pm.test(\"found at least one hit\", () => pm.expect(pm.response.json().hits.total.value).to.be.above(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Bulk index (NDJSON)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-ndjson"
+          },
+          {
+            "key": "Authorization",
+            "value": "ApiKey {{api_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{es_url}}/_bulk?refresh=true",
+          "host": [
+            "{{es_url}}"
+          ],
+          "path": [
+            "_bulk"
+          ],
+          "query": [
+            {
+              "key": "refresh",
+              "value": "true"
+            }
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"index\":{\"_index\":\"api-practice\",\"_id\":\"2\"}}\n{\"customer\":\"globex\",\"severity\":\"low\",\"message\":\"timeout calling payments API\"}\n{\"index\":{\"_index\":\"api-practice\",\"_id\":\"3\"}}\n{\"customer\":\"initech\",\"severity\":\"medium\",\"message\":\"429 from rate limiter\"}\n"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));",
+              "pm.test(\"bulk had no item errors\", () => pm.expect(pm.response.json().errors).to.eql(false));",
+              "// Gotcha: _bulk returns 200 even when individual items fail. Always check \"errors\"."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. List indices (_cat)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "ApiKey {{api_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{es_url}}/_cat/indices/api-practice?format=json&v=true",
+          "host": [
+            "{{es_url}}"
+          ],
+          "path": [
+            "_cat",
+            "indices",
+            "api-practice"
+          ],
+          "query": [
+            {
+              "key": "format",
+              "value": "json"
+            },
+            {
+              "key": "v",
+              "value": "true"
+            }
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": ""
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. DEBUG: malformed query returns 400",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "ApiKey {{api_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{es_url}}/api-practice/_search",
+          "host": [
+            "{{es_url}}"
+          ],
+          "path": [
+            "api-practice",
+            "_search"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": {\n    \"not_a_real_query\": {}\n  }\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"400 bad request\", () => pm.response.to.have.status(400));",
+              "pm.test(\"error explains the cause\", () => pm.expect(pm.response.json().error.type).to.be.a(\"string\"));",
+              "// Practice: read error.root_cause[0].reason aloud as if explaining it to a customer."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. DEBUG: no credentials returns 401",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{es_url}}/_cluster/health",
+          "host": [
+            "{{es_url}}"
+          ],
+          "path": [
+            "_cluster",
+            "health"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": ""
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"401 unauthorized\", () => pm.response.to.have.status(401));",
+              "// 401 means who are you. 403 would mean you are known but not allowed. Say the difference out loud."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. DEBUG: missing index returns 404",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "ApiKey {{api_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{es_url}}/does-not-exist/_search",
+          "host": [
+            "{{es_url}}"
+          ],
+          "path": [
+            "does-not-exist",
+            "_search"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": ""
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"404 not found\", () => pm.response.to.have.status(404));",
+              "pm.test(\"error type is index_not_found_exception\", () => pm.expect(pm.response.json().error.type).to.eql(\"index_not_found_exception\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Cleanup: delete index",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "ApiKey {{api_key}}"
+          }
+        ],
+        "url": {
+          "raw": "{{es_url}}/api-practice",
+          "host": [
+            "{{es_url}}"
+          ],
+          "path": [
+            "api-practice"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": ""
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200 OK\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
