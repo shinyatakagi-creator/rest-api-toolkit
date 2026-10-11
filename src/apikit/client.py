@@ -44,7 +44,13 @@ class RetryPolicy:
         if retry_after is not None:
             return min(retry_after, self.max_delay)
         exp = min(self.base_delay * (2 ** (attempt - 1)), self.max_delay)
-        return exp / 2 + random.uniform(0, exp / 2)  # jitter, so clients do not retry in lockstep
+        # Retry jitter, not a security use of randomness.
+        return exp / 2 + random.uniform(0, exp / 2)  # nosec B311
+
+
+def _strip_query(value: str) -> str:
+    """Drop the query string. Credentials sometimes travel there (api_key=...) and must not reach logs or errors."""
+    return value.split("?", 1)[0].split("#", 1)[0]
 
 
 def _parse_retry_after(value: str | None) -> float | None:
@@ -57,11 +63,14 @@ def _parse_retry_after(value: str | None) -> float | None:
 
 
 def _raise_for_status(resp: httpx.Response, request_id: str) -> None:
-    if resp.status_code < 400:
+    if resp.status_code < 300 or resp.status_code == 304:
         return
     rid = resp.headers.get("x-request-id") or resp.headers.get("x-correlation-id") or request_id
-    kwargs = dict(status=resp.status_code, body=resp.text[:500], request_id=rid, url=str(resp.request.url))
+    kwargs = dict(status=resp.status_code, body=resp.text[:500], request_id=rid, url=_strip_query(str(resp.request.url)))
     code = resp.status_code
+    if 300 <= code < 400:
+        # Redirects are not followed (they would carry the credentials to the new host). Say so clearly.
+        raise ApiError("Redirect not followed. Check the base URL.", **kwargs)
     # GitHub signals an exhausted primary rate limit with 403 plus x-ratelimit-remaining: 0, not 429.
     if code == 403 and resp.headers.get("x-ratelimit-remaining") == "0":
         reset = resp.headers.get("x-ratelimit-reset")
@@ -97,14 +106,22 @@ class ApiClient:
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
         default_headers: dict[str, str] | None = None,
+        allow_insecure: bool = False,
     ) -> None:
+        base = httpx.URL(base_url)
+        local = base.host in {"localhost", "127.0.0.1", "::1"}
+        if (token or api_key) and base.scheme != "https" and not (local or allow_insecure):
+            raise ValueError("Refusing to send credentials over plain HTTP. Use https, or pass allow_insecure=True.")
+        self._origin = (base.scheme, base.host, base.port or (443 if base.scheme == "https" else 80))
         headers = {"Accept": "application/json", "User-Agent": "rest-api-toolkit/0.1"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
         if api_key:
             headers[api_key_header] = api_key
         headers.update(default_headers or {})
-        self._http = httpx.Client(base_url=base_url, headers=headers, timeout=timeout, transport=transport)
+        # follow_redirects stays off: a redirect to another host would carry the Authorization header with it.
+        self._http = httpx.Client(base_url=base_url, headers=headers, timeout=timeout, transport=transport,
+                                  follow_redirects=False)
         self.retry = retry or RetryPolicy()
         self._sleep = sleep
         self.last_response: httpx.Response | None = None
@@ -138,21 +155,21 @@ class ApiClient:
                 if safe_to_retry and attempt < self.retry.max_attempts:
                     delay = self.retry.delay_for(attempt, None)
                     log.warning("%s %s failed (%s). Retry %d in %.1fs. request_id=%s",
-                                method, path, type(exc).__name__, attempt, delay, request_id)
+                                method, _strip_query(path), type(exc).__name__, attempt, delay, request_id)
                     self._sleep(delay)
                     continue
-                raise ServerError(f"Network failure: {type(exc).__name__}", request_id=request_id, url=path) from exc
+                raise ServerError(f"Network failure: {type(exc).__name__}", request_id=request_id, url=_strip_query(path)) from exc
 
             self.last_response = resp
             if (resp.status_code in self.retry.retry_statuses and safe_to_retry
                     and attempt < self.retry.max_attempts):
                 delay = self.retry.delay_for(attempt, _parse_retry_after(resp.headers.get("retry-after")))
                 log.warning("%s %s returned %d. Retry %d in %.1fs. request_id=%s",
-                            method, path, resp.status_code, attempt, delay, request_id)
+                            method, _strip_query(path), resp.status_code, attempt, delay, request_id)
                 self._sleep(delay)
                 continue
 
-            log.debug("%s %s -> %d (attempts=%d, request_id=%s)", method, path, resp.status_code, attempt, request_id)
+            log.debug("%s %s -> %d (attempts=%d, request_id=%s)", method, _strip_query(path), resp.status_code, attempt, request_id)
             _raise_for_status(resp, request_id)
             return resp
 
@@ -171,6 +188,11 @@ class ApiClient:
     def delete(self, path: str, **kw: Any) -> None:
         self.request("DELETE", path, **kw)
 
+    def _same_origin(self, url: str) -> bool:
+        target = httpx.URL(self._http.base_url.join(url))
+        port = target.port or (443 if target.scheme == "https" else 80)
+        return (target.scheme, target.host, port) == self._origin
+
     # ---- pagination ------------------------------------------------
     def paginate_link_header(self, path: str, *, params: dict | None = None, max_pages: int = 100) -> Iterator[Any]:
         """Follow rel="next" in the Link header (GitHub style). Yields items."""
@@ -183,6 +205,10 @@ class ApiClient:
             url = resp.links.get("next", {}).get("url")
             if not url:
                 return
+            if not self._same_origin(url):
+                # The server controls this link. Following it elsewhere would hand over our credentials.
+                raise ApiError("Refusing to follow a pagination link to a different origin",
+                               url=_strip_query(url), request_id=None)
 
     def paginate_pages(self, path: str, *, params: dict | None = None, page_param: str = "page",
                        size_param: str = "per_page", page_size: int = 50, items_key: str | None = None,

@@ -15,6 +15,13 @@ import sys
 
 from apikit import ApiClient, AuthenticationError, ForbiddenError, NotFoundError, RateLimitError
 
+def csv_safe(value):
+    """Stop spreadsheet apps treating a cell as a formula (CSV injection). Prefix risky text with a quote."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 FIELDS = ["name", "language", "stargazers_count", "forks_count", "pushed_at", "html_url"]
 
 
@@ -49,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     with open(args.out, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=FIELDS, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(repos)
+        writer.writerows({k: csv_safe(v) for k, v in repo.items()} for repo in repos)
     print(f"Wrote {len(repos)} repos to {args.out}. Rate limit remaining: {remaining}")
     return 0
 

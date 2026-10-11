@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from apikit import (ApiClient, AuthenticationError, BadRequestError, ConflictError, ForbiddenError,
+from apikit import (ApiClient, ApiError, AuthenticationError, BadRequestError, ConflictError, ForbiddenError,
                     NotFoundError, RateLimitError, RetryPolicy, ServerError)
 
 
@@ -154,3 +154,61 @@ def test_plain_403_is_still_forbidden():
     client, _ = make_client(lambda req: httpx.Response(403, headers={"x-ratelimit-remaining": "42"}))
     with pytest.raises(ForbiddenError):
         client.get("/admin")
+
+
+# ---- security regression tests ------------------------------------------------
+
+def test_pagination_refuses_a_link_to_another_origin_and_never_sends_the_token_there():
+    hosts = []
+
+    def handler(req):
+        hosts.append(req.url.host)
+        return httpx.Response(200, json=[1], headers={"Link": '<https://evil.example/steal?key=s3cret>; rel="next"'})
+
+    client, _ = make_client(handler, token="tok-123")
+    with pytest.raises(ApiError) as info:
+        list(client.paginate_link_header("/items"))
+    assert hosts == ["api.test"]
+    assert "s3cret" not in str(info.value)
+
+
+def test_pagination_refuses_a_downgrade_to_http():
+    client, _ = make_client(lambda req: httpx.Response(
+        200, json=[1], headers={"Link": '<http://api.test/items?page=2>; rel="next"'}), token="tok")
+    with pytest.raises(ApiError):
+        list(client.paginate_link_header("/items"))
+
+
+def test_credentials_are_refused_over_plain_http():
+    with pytest.raises(ValueError, match="plain HTTP"):
+        ApiClient("http://api.example.com", token="abc")
+    with pytest.raises(ValueError, match="plain HTTP"):
+        ApiClient("http://api.example.com", api_key="abc")
+
+
+def test_plain_http_is_fine_for_localhost_or_without_credentials_or_when_opted_in():
+    ApiClient("http://localhost:8000", token="abc").close()
+    ApiClient("http://127.0.0.1:8000", api_key="abc").close()
+    ApiClient("http://api.example.com").close()
+    ApiClient("http://internal.example", token="abc", allow_insecure=True).close()
+
+
+def test_redirects_are_not_followed():
+    calls = []
+
+    def handler(req):
+        calls.append(str(req.url))
+        return httpx.Response(302, headers={"Location": "https://evil.example/"})
+
+    client, _ = make_client(handler, token="tok")
+    with pytest.raises(ApiError):
+        client.get("/x")
+    assert calls == ["https://api.test/x"]
+
+
+def test_error_messages_do_not_leak_query_strings():
+    client, _ = make_client(lambda req: httpx.Response(404), api_key="k")
+    with pytest.raises(NotFoundError) as info:
+        client.get("/thing", params={"api_key": "SUPERSECRET", "token": "abc"})
+    assert "SUPERSECRET" not in str(info.value) and "abc" not in str(info.value)
+    assert "SUPERSECRET" not in repr(info.value)

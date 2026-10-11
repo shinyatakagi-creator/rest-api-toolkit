@@ -8,7 +8,9 @@ import httpx
 
 from apikit.webhook import sign
 
-secret = os.environ.get("WEBHOOK_SECRET", "dev-secret")
+secret = os.environ.get("WEBHOOK_SECRET")
+if not secret:
+    raise SystemExit("Set WEBHOOK_SECRET to the same value the server uses.")
 body = json.dumps({"id": os.environ.get("EVENT_ID", str(uuid.uuid4())), "type": "invoice.paid"}).encode()
 ts = str(int(time.time()))
 resp = httpx.post("http://127.0.0.1:8000/webhook", content=body,
