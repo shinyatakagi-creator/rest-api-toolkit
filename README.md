@@ -15,7 +15,7 @@ It is not production software. It is a compact place to learn, show and test the
 | `postman/` | Postman collection against the Elasticsearch REST API, including requests that fail on purpose (400, 401, 404) for debugging practice |
 | `docs/debugging-playbook.md` | The order I use to debug a failing API call, with a status code table |
 | `docs/interview-notes.md` | Plain-English answers to common API questions, and what I do and do not claim |
-| `tests/` | 27 tests, all offline (mocked transport), covering the failure cases below |
+| `tests/` | 62 tests, all offline (mocked transport), covering the failure cases below |
 
 ## Quick start
 
